@@ -14,6 +14,14 @@ let remoteStorageFallbackUntil = 0;
 
 const REMOTE_STORAGE_FALLBACK_MS = 30_000;
 
+// ─── Incremental verse_progress sync ─────────────────────────────────────────
+// On each cold load we record the fetch timestamp and the remote scope timestamp
+// so that the next load can request only rows changed since then.
+const VP_SYNC_TS_PREFIX = '@bvm/vp_sync_ts:';   // ISO timestamp of last fetch start
+const VP_SCOPE_TS_PREFIX = '@bvm/vp_scope_ts:';  // remote scopeUpdatedAt from last load
+
+type VpRow = { book: string; chapter: number | string; verse: number | string } & Record<string, unknown>;
+
 async function getCurrentUserId(): Promise<string | null> {
   if (!isSupabaseConfigured) {
     return null;
@@ -90,12 +98,69 @@ async function ensureRemoteStorageLoaded(userId: string): Promise<{ userId: stri
     return { userId, storage: storageCache };
   }
 
-  const remoteSnapshot = await loadRemoteUserStateSnapshot(userId);
+  // Read incremental sync state in parallel to minimise latency
+  const vpSyncTsKey = VP_SYNC_TS_PREFIX + userId;
+  const vpScopeTsKey = VP_SCOPE_TS_PREFIX + userId;
+  const [lastVpSyncTs, lastVpScopeTs, existingVpJson] = await Promise.all([
+    AsyncStorage.getItem(vpSyncTsKey),
+    AsyncStorage.getItem(vpScopeTsKey),
+    AsyncStorage.getItem(STORAGE_KEYS.progress),
+  ]);
+
+  // Record the fetch start time BEFORE the network call so we never miss a row
+  // that lands on the server while the request is in flight.
+  const fetchStartTs = new Date().toISOString();
+  const isIncremental = Boolean(lastVpSyncTs);
+
+  const remoteSnapshot = await loadRemoteUserStateSnapshot(userId, {
+    verseProgressSyncAfter: isIncremental ? lastVpSyncTs! : undefined,
+  });
+
+  // Merge incremental verse_progress rows with the local baseline
+  if (isIncremental) {
+    const newRowsJson = remoteSnapshot.storage[STORAGE_KEYS.progress];
+    const newRows = newRowsJson ? safeJsonParse<VpRow[]>(newRowsJson, []) : null;
+    const hasNewRows = Boolean(newRows && newRows.length > 0);
+
+    if (existingVpJson) {
+      if (hasNewRows) {
+        // Overlay changed/new rows onto the existing full set
+        const existingRows = safeJsonParse<VpRow[]>(existingVpJson, []);
+        const rowMap = new Map(existingRows.map(r => [`${r.book}:${r.chapter}:${r.verse}`, r]));
+        for (const row of newRows!) {
+          rowMap.set(`${row.book}:${row.chapter}:${row.verse}`, row);
+        }
+        remoteSnapshot.storage[STORAGE_KEYS.progress] = JSON.stringify(Array.from(rowMap.values()));
+      } else {
+        // Nothing changed remotely – restore the full local baseline
+        remoteSnapshot.storage[STORAGE_KEYS.progress] = existingVpJson;
+      }
+    }
+
+    // Preserve the remote scope timestamp when no new rows were returned so
+    // that loadLocalScopeOverrides does not incorrectly treat local data as newer.
+    if (lastVpScopeTs && !remoteSnapshot.scopeUpdatedAt.verse_progress) {
+      remoteSnapshot.scopeUpdatedAt.verse_progress = lastVpScopeTs;
+    }
+  }
+
+  // Let any pending local offline mutations win over the (possibly partial) remote data
   const mergedStorage = await loadLocalScopeOverrides(userId, remoteSnapshot.storage, remoteSnapshot.scopeUpdatedAt);
 
   storageCache = mergedStorage;
   storageCacheUserId = userId;
   clearRemoteStorageFallback(userId);
+
+  // Persist incremental sync markers and the final verse_progress baseline so
+  // the next cold load can use them.
+  const newVpScopeTs = remoteSnapshot.scopeUpdatedAt.verse_progress;
+  await Promise.all([
+    AsyncStorage.setItem(vpSyncTsKey, fetchStartTs),
+    newVpScopeTs ? AsyncStorage.setItem(vpScopeTsKey, newVpScopeTs) : Promise.resolve(),
+    mergedStorage[STORAGE_KEYS.progress]
+      ? AsyncStorage.setItem(STORAGE_KEYS.progress, mergedStorage[STORAGE_KEYS.progress])
+      : Promise.resolve(),
+  ]);
 
   await supabase.from(APP_STORAGE_TABLE).upsert({
     user_id: userId,
@@ -208,9 +273,19 @@ export async function storageRemoveItem(key: string): Promise<void> {
 }
 
 export function resetAppStorageCache(userId?: string | null): void {
+  const previousUserId = storageCacheUserId;
   storageCache = null;
   storageCacheUserId = userId ?? null;
   clearRemoteStorageFallback();
+
+  // When logging out or switching accounts, remove the incremental sync markers
+  // so the next login always starts with a clean full fetch.
+  if (previousUserId && previousUserId !== storageCacheUserId) {
+    void AsyncStorage.multiRemove([
+      VP_SYNC_TS_PREFIX + previousUserId,
+      VP_SCOPE_TS_PREFIX + previousUserId,
+    ]);
+  }
 }
 
 export { APP_STORAGE_TABLE, STORAGE_KEYS, safeJsonParse };

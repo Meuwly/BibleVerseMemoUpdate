@@ -19,6 +19,15 @@ export interface RemoteUserStateSnapshot {
   scopeUpdatedAt: Partial<Record<UserStateScope, string>>;
 }
 
+export interface LoadRemoteOptions {
+  /**
+   * When set, only verse_progress rows with updated_at strictly greater than
+   * this ISO timestamp are fetched (incremental sync). The caller is responsible
+   * for merging the partial result with its local baseline.
+   */
+  verseProgressSyncAfter?: string;
+}
+
 interface ScopeSyncOperation {
   scope: UserStateScope;
   userId: string;
@@ -97,16 +106,27 @@ function warnMissingDedicatedTable(tableName: string): void {
   );
 }
 
-export async function loadRemoteUserStateSnapshot(userId: string): Promise<RemoteUserStateSnapshot> {
+export async function loadRemoteUserStateSnapshot(userId: string, options?: LoadRemoteOptions): Promise<RemoteUserStateSnapshot> {
   if (!isSupabaseConfigured) {
     return { storage: {}, scopeUpdatedAt: {} };
   }
 
   const client = getClient();
+
+  let verseProgressQuery = client
+    .from('verse_progress')
+    .select('book, chapter, verse, attempts, correct_guesses, last_practiced, completed, started, mastery_level, memorized, srs, client_updated_at, updated_at')
+    .eq('user_id', userId)
+    .order('updated_at', { ascending: false });
+
+  if (options?.verseProgressSyncAfter) {
+    verseProgressQuery = verseProgressQuery.gt('updated_at', options.verseProgressSyncAfter);
+  }
+
   const [legacyResult, preferencesResult, verseProgressResult, quizStatsResult, streakStateResult] = await Promise.all([
     client.from(APP_STORAGE_TABLE).select('storage, updated_at').eq('user_id', userId).maybeSingle(),
     client.from('user_preferences').select('language, learning_mode, theme, dyslexia_settings, validation_settings, appearance_settings, learning_settings, tts_settings, notification_settings, custom_versions, client_updated_at, updated_at').eq('user_id', userId).maybeSingle(),
-    client.from('verse_progress').select('book, chapter, verse, attempts, correct_guesses, last_practiced, completed, started, mastery_level, memorized, srs, client_updated_at, updated_at').eq('user_id', userId).order('updated_at', { ascending: false }),
+    verseProgressQuery,
     client.from('user_quiz_stats').select('quizzes_completed, questions_answered, correct_answers, best_score, last_played_at, client_updated_at, updated_at').eq('user_id', userId).maybeSingle(),
     client.from('user_streak_state').select('current_streak, best_streak, last_activity_date, client_updated_at, updated_at').eq('user_id', userId).maybeSingle(),
   ]);
