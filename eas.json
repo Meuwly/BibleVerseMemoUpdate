@@ -1,0 +1,46 @@
+{
+  "cli": {
+    "version": ">= 5.0.0"
+  },
+  "build": {
+    "preview": {
+      "android": {
+        "buildType": "apk",
+        "env": {
+          "GRADLE_OPTS": "-Dorg.gradle.jvmargs=-Xmx4096m",
+          "ANDROID_SDK_ROOT": "/opt/android-sdk"
+        },
+        "prebuildCommand": "scripts/accept-android-licenses.sh"
+      },
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview2": {
+      "android": {
+        "buildType": "apk",
+        "env": {
+          "GRADLE_OPTS": "-Dorg.gradle.jvmargs=-Xmx4096m",
+          "ANDROID_SDK_ROOT": "/opt/android-sdk"
+        },
+        "prebuildCommand": "scripts/accept-android-licenses.sh"
+      }
+    },
+    "preview3": {
+      "developmentClient": true
+    },
+    "production": {
+      "android": {
+        "gradleCommand": ":app:bundleRelease",
+        "env": {
+          "GRADLE_OPTS": "-Dorg.gradle.jvmargs=-Xmx4096m",
+          "ANDROID_SDK_ROOT": "/opt/android-sdk"
+        },
+        "prebuildCommand": "scripts/accept-android-licenses.sh"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
