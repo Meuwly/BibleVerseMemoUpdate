@@ -17,6 +17,7 @@ import { t } from "../constants/translations";
 import { quizCategories, type QuizCategory } from "../src/data/quizQuestions";
 import { GlobalXpToast } from "../src/components/GlobalXpToast";
 import { PollLaunchBanner } from "../src/features/polls/PollLaunchBanner";
+import { trackAppOpen } from "../src/features/app/services/appOpenAnalytics";
 
 const queryClient = new QueryClient();
 
@@ -235,6 +236,25 @@ function ChallengeResultWatcher() {
   return null;
 }
 
+
+function AppOpenTracker() {
+  const { user, isAuthReady } = useAuthSessionState();
+  const hasTrackedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isAuthReady || hasTrackedRef.current) {
+      return;
+    }
+
+    hasTrackedRef.current = true;
+    void trackAppOpen(user?.id).catch((error) => {
+      console.warn('[AppOpenTracker] Failed to track app open:', error);
+    });
+  }, [isAuthReady, user?.id]);
+
+  return null;
+}
+
 function AutoSyncProgress() {
   const { user } = useAuthSessionState();
   const { syncProgress } = useAuthProfileState();
@@ -300,6 +320,7 @@ export default function RootLayout() {
         <AuthProvider>
           <SupportModalProvider>
             <GestureHandlerRootView style={styles.root}>
+              <AppOpenTracker />
               <AutoSyncProgress />
               <ChallengeRequestPrompt />
               <ChallengeResultWatcher />
