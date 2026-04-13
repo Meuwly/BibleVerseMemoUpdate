@@ -32,7 +32,7 @@ import { useSettingsAuth } from '../../src/features/settings/hooks/useSettingsAu
 import { useSettingsTts } from '../../src/features/settings/hooks/useSettingsTts';
 import type { Theme } from '../../types/database';
 
-const APP_VERSION = '1.9';
+const APP_VERSION = '2.0';
 
 export default function SettingsScreen() {
   const {
