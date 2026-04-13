@@ -64,7 +64,9 @@ create index if not exists feature_votes_poll_idx on public.feature_votes (poll_
 -- Aggregated view (developer dashboard + in-app results)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-create or replace view public.feature_vote_counts as
+create or replace view public.feature_vote_counts
+  with (security_invoker = true)
+as
   select
     poll_id,
     option_index,
